@@ -1,6 +1,6 @@
 import type { PluginRegistry } from "every-plugin";
 import { createLocalPluginRuntime } from "every-plugin/testing";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import DataProviderTemplatePlugin from "../../index";
 
 // Mock route for testing
@@ -17,6 +17,31 @@ const mockRoute = {
     symbol: "USDC",
     decimals: 6,
   }
+};
+
+// Mock API responses
+const mockFeeResponse = {
+  data: [
+    { finalityThreshold: 1000, minimumFee: 1 },
+    { finalityThreshold: 2000, minimumFee: 1 }
+  ]
+};
+
+const mockAllowanceResponse = {
+  allowance: 124000.0,
+  lastUpdated: "2025-01-23T10:00:00Z"
+};
+
+const mockDefiLlamaResponse = {
+  id: "cctp",
+  displayName: "Circle CCTP",
+  lastDailyVolume: 50000000,
+  lastWeeklyVolume: 350000000,
+  lastMonthlyVolume: 1500000000,
+  currentDayVolume: 55000000,
+  dayBeforeLastVolume: 48000000,
+  weeklyVolume: 350000000,
+  monthlyVolume: 1500000000
 };
 
 const TEST_REGISTRY: PluginRegistry = {
@@ -42,6 +67,44 @@ const TEST_CONFIG = {
 };
 
 describe("Data Provider Plugin Integration Tests", () => {
+  // Setup fetch mocks before creating runtime
+  beforeAll(() => {
+    // Mock fetch globally
+    global.fetch = vi.fn((url: string | URL | Request) => {
+      const urlStr = url.toString();
+
+      // Mock CCTP fees endpoint
+      if (urlStr.includes('/v2/burn/USDC/fees/')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => mockFeeResponse,
+        } as Response);
+      }
+
+      // Mock CCTP allowance endpoint
+      if (urlStr.includes('/v2/fastBurn/USDC/allowance')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => mockAllowanceResponse,
+        } as Response);
+      }
+
+      // Mock DefiLlama endpoint
+      if (urlStr.includes('bridges.llama.fi/bridge/cctp')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => mockDefiLlamaResponse,
+        } as Response);
+      }
+
+      // Default error response
+      return Promise.reject(new Error(`Unmocked URL: ${urlStr}`));
+    }) as any;
+  });
+
   const runtime = createLocalPluginRuntime<typeof TEST_PLUGIN_MAP>(
     {
       registry: TEST_REGISTRY,
@@ -49,12 +112,6 @@ describe("Data Provider Plugin Integration Tests", () => {
     },
     TEST_PLUGIN_MAP
   );
-
-  beforeAll(async () => {
-    const { initialized } = await runtime.usePlugin("@every-plugin/template", TEST_CONFIG);
-    expect(initialized).toBeDefined();
-    expect(initialized.plugin.id).toBe("@every-plugin/template");
-  });
 
   describe("getSnapshot procedure", () => {
     it("should fetch complete snapshot successfully", async () => {

@@ -1,116 +1,116 @@
-# Data Provider Playground
+# CCTP (Circle) Data Provider Plugin
 
-Template repository for building single-provider bridge data adapters for the **NEAR Intents data collection bounty**.
-
-## 🚀 Start Here
-
-This repo contains a complete template for implementing one of the seven supported bridge providers:
-
-- LayerZero, Wormhole, CCTP, Across, deBridge, Axelar, or Li.Fi
-
-**Each provider gets its own plugin** - choose one and implement it using the provided template.
+Market data collection plugin for Circle Cross-Chain Transfer Protocol (CCTP).
 
 ## Quick Start
+
+### Installation
 
 ```bash
 # Install dependencies
 bun install
 
-# Start development server (includes web UI for testing)
+# Copy configuration
+cp packages/_plugin_template/.env.example packages/_plugin_template/.env
+
+# Start server
 bun dev
-
-# Open http://localhost:3001 to see the demo interface
 ```
 
-## How to Implement a Provider
+Navigate to `http://localhost:3001` to interact with the plugin.
 
-### 1. Copy the Template
+### Verify Functionality
 
 ```bash
-cp -r packages/_plugin_template packages/your-provider-plugin
-cd packages/your-provider-plugin
+# Run tests
+bun test
 ```
 
-### 2. Replace Mock Implementation
+## Configuration
 
-Edit `src/service.ts`:
+Optional variables in `.env`:
 
-- Replace `getRates()`, `getVolumes()`, `getLiquidityDepth()`, `getListedAssets()` with real API calls
-- Implement decimal normalization for `effectiveRate` calculations
-- Add proper error handling for rate limits and timeouts
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `CCTP_BASE_URL` | `https://iris-api.circle.com/api/v2` | Circle API base URL |
+| `CCTP_TIMEOUT` | `15000` | Timeout in milliseconds |
+| `MAX_REQUESTS_PER_SECOND` | `35` | Request rate limit |
 
-### 3. Update Plugin Configuration
+Circle API is public, no API key required.
 
-Edit `src/index.ts`:
+## Data Collection
 
-```typescript
-id: "@your-org/your-provider-name"
+| Metric | Source | Endpoint |
+| :--- | :--- | :--- |
+| **Fees** | Circle API | `GET /v2/burn/USDC/fees/{source}/{dest}` |
+| **Liquidity** | Circle API | `GET /v2/fastBurn/USDC/allowance` |
+| **Assets** | Circle Docs | Official USDC contracts |
+| **Volume** | DefiLlama | `GET /bridge/cctp` |
+
+## Domain Mappings
+
+Plugin uses official Circle domain IDs from `config/cctp-domains.json`:
+
+- Ethereum = 0
+- Avalanche = 1
+- Optimism = 2
+- Arbitrum = 3
+- Solana = 5
+- Base = 6
+- Polygon PoS = 7
+- Unichain = 10
+- Linea = 11
+
+Source: https://developers.circle.com/stablecoins/docs/cctp-protocol-contract
+
+## How CCTP Works
+
+CCTP uses a burn-and-mint model:
+- Burns USDC on source chain
+- Mints native USDC on destination chain
+- No wrapped tokens or liquidity pools
+- 1:1 transfers (minus fees)
+
+### Transfer Options
+
+- **Fast Transfer** (~8-20s): Uses Circle allowance for instant confirmation, ~0.01% fee
+- **Standard Transfer** (~15 min): Waits for full finality, no fee
+
+## Architecture
+
+```
+Client
+  ↓
+getSnapshot()
+  ↓
+┌──────────────┬──────────────┬───────────────┬─────────────────┐
+│ getVolumes   │ getRates     │ getLiquidity  │ getListedAssets │
+│ (DefiLlama)  │ (Circle API) │ (Circle API)  │ (Circle Docs)   │
+└──────────────┴──────────────┴───────────────┴─────────────────┘
+  ↓
+ProviderSnapshot
 ```
 
-### 4. Test Your Implementation
+## Limitations
 
-```bash
-# Run tests (they pass with mock data, validate your real implementation)
-npm test
+1. **USDC Only**: CCTP exclusively supports native USDC
+2. **Third-party Volume**: Circle doesn't expose historical volume data, using DefiLlama
+3. **Non-traditional Liquidity**: Fast Transfer Allowance is not a liquidity pool
+4. **Official Domains Only**: Only chains with official Circle domain IDs supported
 
-# Use the web UI at http://localhost:3001 to visualize your data
-```
+## Robustness
 
-## Project Structure
+- Automatic retries with exponential backoff (up to 3 attempts)
+- Rate limiting with token bucket algorithm (35 req/sec)
+- Verified domain mappings from official documentation
+- 10-minute cache for volume data
 
-```bash
-data-provider-playground/
-├── apps/web/                    # Demo UI for testing your plugin
-├── packages/
-│   ├── _plugin_template/        # 👈 START HERE - Copy this to create your plugin
-│   └── api/                     # API runtime that loads your plugin
-└── README.md                    # This file
-```
+## Resources
 
-## Testing Your Plugin
-
-The web UI helps you visualize and test your plugin:
-
-1. **Configure routes** - Set source/destination asset pairs
-2. **Set notional amounts** - USD amounts to quote
-3. **Choose time windows** - 24h, 7d, 30d volumes
-4. **Fetch snapshot** - See volumes, rates, liquidity, and assets
-5. **Run tests** - Validate your implementation
-
-## Environment Variables
-
-```bash
-# Required for your plugin
-DATA_PROVIDER_API_KEY=your_provider_api_key
-
-# Optional
-DATA_PROVIDER_BASE_URL=https://api.yourprovider.com
-DATA_PROVIDER_TIMEOUT=10000
-```
-
-## Contract Specification
-
-Your plugin implements a single `getSnapshot` endpoint that returns:
-
-- **volumes**: Trading volume for specified time windows
-- **rates**: Exchange rates and fees for route/notional combinations
-- **liquidity**: Maximum input amounts at 50bps and 100bps slippage
-- **listedAssets**: Assets supported by the provider
-
-## Available Scripts
-
-- `bun dev`: Start all applications in development mode
-- `bun build`: Build all applications
-- `bun test`: Run tests across all packages
-- `bun check-types`: Check TypeScript types
-
-## Notes
-
-- **One provider per plugin** - Implement only the provider you chose
-- **Template injection** - Use `{{SECRET_NAME}}` for secrets in runtime config
-- **Error resilience** - Implement retries and rate limiting in your service methods
-- **Tests pass first** - Mock implementation validates structure, real implementation must match
+- **Circle CCTP Docs**: https://developers.circle.com/cctp
+- **API Docs**: https://developers.circle.com/stablecoins/docs/cctp-api
+- **Support**: https://t.me/+Xfx2Mx6pbRYxMzA5
 
 ## License
 
-Part of the NEAR Intents data collection system.
+MIT

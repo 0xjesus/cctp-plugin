@@ -1,5 +1,5 @@
 import { Effect } from "every-plugin/effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import { DataProviderService } from "../../service";
 
 // Mock route for testing
@@ -18,12 +18,77 @@ const mockRoute = {
   }
 };
 
+// Mock API responses
+const mockFeeResponse = {
+  data: [
+    { finalityThreshold: 1000, minimumFee: 1 },
+    { finalityThreshold: 2000, minimumFee: 1 }
+  ]
+};
+
+const mockAllowanceResponse = {
+  allowance: 124000.0,
+  lastUpdated: "2025-01-23T10:00:00Z"
+};
+
+const mockDefiLlamaResponse = {
+  id: "cctp",
+  displayName: "Circle CCTP",
+  lastDailyVolume: 50000000,
+  lastWeeklyVolume: 350000000,
+  lastMonthlyVolume: 1500000000,
+  currentDayVolume: 55000000,
+  dayBeforeLastVolume: 48000000,
+  weeklyVolume: 350000000,
+  monthlyVolume: 1500000000
+};
+
 describe("DataProviderService", () => {
   const service = new DataProviderService(
     "https://api.example.com",
     "test-api-key",
     5000
   );
+
+  beforeEach(() => {
+    // Reset fetch mocks before each test
+    vi.restoreAllMocks();
+
+    // Mock fetch globally
+    global.fetch = vi.fn((url: string | URL | Request) => {
+      const urlStr = url.toString();
+
+      // Mock CCTP fees endpoint
+      if (urlStr.includes('/v2/burn/USDC/fees/')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => mockFeeResponse,
+        } as Response);
+      }
+
+      // Mock CCTP allowance endpoint
+      if (urlStr.includes('/v2/fastBurn/USDC/allowance')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => mockAllowanceResponse,
+        } as Response);
+      }
+
+      // Mock DefiLlama endpoint
+      if (urlStr.includes('bridges.llama.fi/bridge/cctp')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => mockDefiLlamaResponse,
+        } as Response);
+      }
+
+      // Default error response
+      return Promise.reject(new Error(`Unmocked URL: ${urlStr}`));
+    }) as any;
+  });
 
   describe("getSnapshot", () => {
     it("should return complete snapshot structure", async () => {
@@ -124,14 +189,17 @@ describe("DataProviderService", () => {
         })
       );
 
-      expect(result.listedAssets.assets).toHaveLength(3);
+      // CCTP supports 7 USDC assets (6 EVM chains + Solana)
+      expect(result.listedAssets.assets).toHaveLength(7);
 
       // Verify asset structure
       result.listedAssets.assets.forEach(asset => {
         expect(asset.chainId).toBeTypeOf("string");
         expect(asset.assetId).toBeTypeOf("string");
         expect(asset.symbol).toBeTypeOf("string");
+        expect(asset.symbol).toBe("USDC"); // CCTP only supports USDC
         expect(asset.decimals).toBeTypeOf("number");
+        expect(asset.decimals).toBe(6); // USDC always has 6 decimals
       });
 
       expect(result.listedAssets.measuredAt).toBeTypeOf("string");
