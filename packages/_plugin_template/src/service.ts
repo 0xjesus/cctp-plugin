@@ -1,7 +1,6 @@
 import { Effect } from "every-plugin/effect";
 import type { z } from "every-plugin/zod";
-import * as fs from "fs";
-import * as path from "path";
+import cctpDomainsConfig from "../config/cctp-domains.json";
 
 // Import types from contract
 import type {
@@ -131,12 +130,75 @@ export class DataProviderService {
   private readonly MAX_RETRIES = 3;
   private readonly RETRY_DELAYS = [1000, 2000, 4000]; // 1s, 2s, 4s
   private readonly DEFILLAMA_BASE_URL = "https://bridges.llama.fi";
-  private readonly CCTP_BRIDGE_ID = "cctp"; // CCTP bridge ID on DefiLlama
+  private readonly CCTP_BRIDGE_ID = "51"; // Circle CCTP bridge ID on DefiLlama
   private readonly VOLUME_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
   private cctpDomains: CCTPDomainsConfig | null = null;
 
   // Cache for volume data to avoid excessive API calls
   private volumeCache: { data: DefiLlamaBridgeResponse | null; fetchedAt: number } | null = null;
+
+  private normalizeNumber(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      const cleaned = value.replace(/,/g, "").trim();
+      if (cleaned.length === 0) {
+        return null;
+      }
+
+      const parsed = Number.parseFloat(cleaned);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    return null;
+  }
+
+  private parseDefiLlamaResponse(raw: unknown): DefiLlamaBridgeResponse | null {
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+
+    const candidate = raw as Record<string, unknown>;
+    const requiredKeys = [
+      "lastDailyVolume",
+      "currentDayVolume",
+      "dayBeforeLastVolume",
+      "weeklyVolume",
+      "monthlyVolume",
+    ];
+
+    const normalized: Record<string, number> = {};
+
+    for (const key of requiredKeys) {
+      const value = this.normalizeNumber(candidate[key]);
+      if (value === null) {
+        return null;
+      }
+      normalized[key] = value;
+    }
+
+    // API returns id as number, convert to string
+    const id = String(candidate.id || "");
+    const displayName = typeof candidate.displayName === "string" ? candidate.displayName : "";
+
+    if (!id || !displayName) {
+      return null;
+    }
+
+    return {
+      id,
+      displayName,
+      lastDailyVolume: normalized.lastDailyVolume,
+      lastWeeklyVolume: normalized.weeklyVolume, // Map weeklyVolume to lastWeeklyVolume
+      lastMonthlyVolume: normalized.monthlyVolume, // Map monthlyVolume to lastMonthlyVolume
+      currentDayVolume: normalized.currentDayVolume,
+      dayBeforeLastVolume: normalized.dayBeforeLastVolume,
+      weeklyVolume: normalized.weeklyVolume,
+      monthlyVolume: normalized.monthlyVolume,
+    };
+  }
 
   constructor(
     private readonly baseUrl: string,
@@ -150,15 +212,21 @@ export class DataProviderService {
     );
     this.rateLimiter = new RateLimiter(maxRequestsPerSecond, maxRequestsPerSecond);
 
-    // Load official CCTP domain configuration from JSON file
-    // Contains REAL domain IDs from Circle's official documentation - NEVER invented
+    console.log(`[CCTP] Service configured with base URL: ${this.baseUrl}`);
+
+    // Load official CCTP domain configuration bundled at build time
     try {
-      const configPath = path.join(__dirname, '..', 'config', 'cctp-domains.json');
-      const configData = fs.readFileSync(configPath, 'utf-8');
-      this.cctpDomains = JSON.parse(configData) as CCTPDomainsConfig;
-      console.log(`[CCTP] Loaded ${Object.keys(this.cctpDomains.domains).length} official domain mappings from Circle`);
+      const parsedConfig = cctpDomainsConfig as CCTPDomainsConfig | undefined;
+      if (!parsedConfig || typeof parsedConfig !== "object" || !parsedConfig.domains) {
+        throw new Error("Missing domain mappings");
+      }
+
+      this.cctpDomains = parsedConfig;
+      console.log(
+        `[CCTP] Loaded ${Object.keys(this.cctpDomains.domains).length} official domain mappings from Circle`,
+      );
     } catch (error) {
-      console.error('[CCTP] Failed to load domains config:', error);
+      console.error("[CCTP] Failed to load domains config:", error);
       this.cctpDomains = null;
     }
   }
@@ -206,32 +274,45 @@ export class DataProviderService {
   /**
    * Get complete snapshot of CCTP data for given routes and notionals.
    */
-  getSnapshot(params: {
+  async getSnapshot(params: {
     routes: Array<{ source: AssetType; destination: AssetType }>;
     notionals: string[];
     includeWindows?: Array<"24h" | "7d" | "30d">;
-  }) {
-    return Effect.tryPromise({
-      try: async () => {
-        console.log(`[CCTP] Fetching snapshot for ${params.routes.length} routes`);
+  }): Promise<ProviderSnapshotType> {
+    try {
+      console.log(`[CCTP] Fetching snapshot for ${params.routes.length} routes`);
 
-        const [volumes, rates, liquidity, listedAssets] = await Promise.all([
-          this.getVolumes(params.includeWindows || ["24h"]),
-          this.getRates(params.routes, params.notionals),
-          this.getLiquidityDepth(params.routes),
-          this.getListedAssets()
-        ]);
+      const [volumes, rates, liquidity, listedAssets] = await Promise.all([
+        this.getVolumes(params.includeWindows || ["24h"]),
+        this.getRates(params.routes, params.notionals),
+        this.getLiquidityDepth(params.routes),
+        this.getListedAssets()
+      ]);
 
-        return {
-          volumes,
-          rates,
-          liquidity,
-          listedAssets,
-        } satisfies ProviderSnapshotType;
-      },
-      catch: (error: unknown) =>
-        new Error(`Failed to fetch snapshot: ${error instanceof Error ? error.message : String(error)}`)
-    });
+      console.log("[CCTP] All data fetched successfully");
+      console.log("[CCTP] Volumes:", volumes.length);
+      console.log("[CCTP] Rates:", rates.length);
+      console.log("[CCTP] Liquidity:", liquidity.length);
+      console.log("[CCTP] Listed assets:", listedAssets.assets.length);
+
+      const snapshot = {
+        volumes,
+        rates,
+        liquidity,
+        listedAssets,
+      } satisfies ProviderSnapshotType;
+
+      console.log("[CCTP] Snapshot object created successfully");
+      return snapshot;
+    } catch (error: unknown) {
+      console.log("[CCTP] Snapshot catch block triggered");
+      console.log("[CCTP] Error type:", typeof error);
+      console.log("[CCTP] Error constructor:", (error as any)?.constructor?.name);
+      console.log("[CCTP] Error message:", (error as any)?.message);
+      throw new Error(
+        `Failed to fetch snapshot: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   /**
@@ -370,11 +451,17 @@ export class DataProviderService {
   ): Promise<LiquidityDepthType[]> {
     try {
       const allowance = await this.fetchAllowanceWithRetry();
-      const liquidity: LiquidityDepthType[] = [];
+      if (!allowance) {
+        console.warn("[CCTP] Allowance unavailable; returning empty liquidity data");
+        return [];
+      }
 
-      // Fast Transfer Allowance represents available liquidity for instant transfers
-      // This is the real limit from CCTP API - not estimated
-      const allowanceUsd = allowance.allowance;
+      const allowanceUsd = Number(allowance.allowance);
+      if (!Number.isFinite(allowanceUsd)) {
+        console.warn("[CCTP] Allowance value is not a finite number; returning empty liquidity data");
+        return [];
+      }
+      const liquidity: LiquidityDepthType[] = [];
 
       console.log(`[CCTP] Fast Transfer Allowance: $${allowanceUsd.toLocaleString()} USDC`);
 
@@ -491,9 +578,19 @@ export class DataProviderService {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        const wrapper: CCTPFeeResponseWrapper = await response.json();
-        console.log(`[CCTP] Successfully fetched fees:`, wrapper);
-        return wrapper.data;
+        const payload = await response.json();
+        const data: CCTPFeeResponse | undefined = Array.isArray(payload)
+          ? payload
+          : Array.isArray((payload as CCTPFeeResponseWrapper | undefined)?.data)
+            ? (payload as CCTPFeeResponseWrapper).data
+            : undefined;
+
+        if (!data || data.length === 0) {
+          throw new Error("CCTP fees endpoint returned an empty or invalid payload");
+        }
+
+        console.log(`[CCTP] Successfully fetched fees:`, data);
+        return data;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         console.error(`[CCTP] Fees attempt ${attempt + 1} failed:`, lastError.message);
@@ -517,7 +614,7 @@ export class DataProviderService {
   /**
    * Fetch CCTP Fast Transfer Allowance with retry logic.
    */
-  private async fetchAllowanceWithRetry(): Promise<CCTPAllowanceResponse> {
+  private async fetchAllowanceWithRetry(): Promise<CCTPAllowanceResponse | null> {
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < this.MAX_RETRIES; attempt++) {
@@ -544,9 +641,29 @@ export class DataProviderService {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        const data: CCTPAllowanceResponse = await response.json();
-        console.log(`[CCTP] Successfully fetched allowance: $${data.allowance.toLocaleString()} USDC`);
-        return data;
+        const payload = await response.json();
+        const rawAllowance = (payload as Partial<CCTPAllowanceResponse> | undefined)?.allowance;
+        const allowance =
+          typeof rawAllowance === "number"
+            ? rawAllowance
+            : typeof rawAllowance === "string"
+              ? Number.parseFloat(rawAllowance)
+              : undefined;
+
+        if (typeof allowance !== "number" || !Number.isFinite(allowance)) {
+          throw new Error("CCTP allowance endpoint returned an invalid allowance value");
+        }
+
+        const result: CCTPAllowanceResponse = {
+          allowance,
+          lastUpdated:
+            typeof (payload as Partial<CCTPAllowanceResponse>)?.lastUpdated === "string"
+              ? (payload as CCTPAllowanceResponse).lastUpdated
+              : new Date().toISOString(),
+        };
+
+        console.log(`[CCTP] Successfully fetched allowance: $${allowance.toLocaleString()} USDC`);
+        return result;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         console.error(`[CCTP] Allowance attempt ${attempt + 1} failed:`, lastError.message);
@@ -559,9 +676,9 @@ export class DataProviderService {
       }
     }
 
-    // Throw error if all retries fail - no estimated data allowed
+    // Allow the rest of the snapshot to render even if allowance is unavailable
     console.error("[CCTP] Failed to fetch allowance from API after all retries");
-    throw new Error("Unable to fetch real allowance data from CCTP API");
+    return null;
   }
 
   /**
@@ -601,11 +718,22 @@ export class DataProviderService {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        const data: DefiLlamaBridgeResponse = await response.json();
+        const rawData = await response.json();
+        const data = this.parseDefiLlamaResponse(rawData);
 
-        // Validate response has expected fields
-        if (typeof data.lastDailyVolume !== 'number') {
-          throw new Error("Invalid response structure from DefiLlama");
+        if (!data) {
+          let preview = "";
+          try {
+            preview = JSON.stringify(rawData).slice(0, 500);
+          } catch {
+            preview = "[unserializable]";
+          }
+
+          throw new Error(
+            preview
+              ? `Invalid response structure from DefiLlama: ${preview}`
+              : "Invalid response structure from DefiLlama"
+          );
         }
 
         // Cache the result

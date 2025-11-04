@@ -20,6 +20,29 @@ function getPluginInfo() {
 
 const pluginInfo = getPluginInfo();
 
+function stripRange(version) {
+  if (typeof version !== "string") {
+    return version;
+  }
+  return version.replace(/^[~^]/, "");
+}
+
+function createSharedEntry(requiredVersion, overrides = {}) {
+  const normalizedRequired =
+    requiredVersion === undefined ? undefined : requiredVersion;
+  const version =
+    overrides.version ??
+    (normalizedRequired ? stripRange(normalizedRequired) : undefined);
+
+  return {
+    version,
+    singleton: true,
+    requiredVersion: normalizedRequired,
+    strictVersion: false,
+    eager: false,
+  };
+}
+
 module.exports = withZephyr({
   hooks: {
       onDeployComplete: (info) => {
@@ -36,7 +59,7 @@ module.exports = withZephyr({
   entry: "./src/index",
   mode: process.env.NODE_ENV === "development" ? "development" : "production",
   target: "async-node",
-  devtool: "source-map",
+  devtool: process.env.NODE_ENV === "development" ? false : "source-map",
   output: {
     uniqueName: pluginInfo.normalizedName,
     publicPath: "auto",
@@ -76,41 +99,17 @@ module.exports = withZephyr({
         "./plugin": "./src/index.ts",
       },
       shared: {
-        "every-plugin": {
+        "every-plugin": createSharedEntry(everyPluginPkg.version, {
           version: everyPluginPkg.version,
-          singleton: true,
-          requiredVersion: everyPluginPkg.version,
-          strictVersion: false,
-          eager: false,
-        },
-        effect: {
-          version: everyPluginPkg.dependencies.effect,
-          singleton: true,
-          requiredVersion: everyPluginPkg.dependencies.effect,
-          strictVersion: false,
-          eager: false,
-        },
-        zod: {
-          version: everyPluginPkg.dependencies.zod,
-          singleton: true,
-          requiredVersion: everyPluginPkg.dependencies.zod,
-          strictVersion: false,
-          eager: false,
-        },
-        "@orpc/contract": {
-          version: everyPluginPkg.dependencies["@orpc/contract"],
-          singleton: true,
-          requiredVersion: everyPluginPkg.dependencies["@orpc/contract"],
-          strictVersion: false,
-          eager: false,
-        },
-        "@orpc/server": {
-          version: everyPluginPkg.dependencies["@orpc/server"],
-          singleton: true,
-          requiredVersion: everyPluginPkg.dependencies["@orpc/server"],
-          strictVersion: false,
-          eager: false,
-        },
+        }),
+        effect: createSharedEntry(everyPluginPkg.dependencies.effect),
+        zod: createSharedEntry(everyPluginPkg.dependencies.zod),
+        "@orpc/contract": createSharedEntry(
+          everyPluginPkg.dependencies["@orpc/contract"],
+        ),
+        "@orpc/server": createSharedEntry(
+          everyPluginPkg.dependencies["@orpc/server"],
+        ),
       },
     }),
   ],

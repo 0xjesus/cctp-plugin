@@ -69,9 +69,7 @@ export default createPlugin({
           windows: input.includeWindows,
         });
 
-        const snapshot = await Effect.runPromise(
-          service.getSnapshot(input)
-        );
+        const snapshot = await service.getSnapshot(input);
 
         console.log("[CCTP Plugin] Snapshot generated successfully:", {
           volumesCount: snapshot.volumes.length,

@@ -51,10 +51,26 @@ export default createPlugin({
 
     return {
       getSnapshot: builder.getSnapshot.handler(async ({ input }) => {
-        const snapshot = await Effect.runPromise(
-          service.getSnapshot(input)
-        );
-        return snapshot;
+        try {
+          console.log("=== GETSNAPSHOT CALLED ===");
+          console.log("Input:", JSON.stringify(input, null, 2));
+
+          const snapshot = await service.getSnapshot(input);
+
+          console.log("=== GETSNAPSHOT SUCCESS ===");
+          return snapshot;
+        } catch (error: unknown) {
+          // Log error details without triggering Next.js source map bug
+          const errorInfo = {
+            type: typeof error,
+            constructor: (error as any)?.constructor?.name,
+            message: (error as any)?.message,
+            stack: (error as any)?.stack,
+            stringified: JSON.stringify(error, Object.getOwnPropertyNames(error)),
+          };
+          console.log("=== RAW ERROR IN GETSNAPSHOT ===", JSON.stringify(errorInfo, null, 2));
+          throw error;
+        }
       }),
 
       ping: builder.ping.handler(async () => {
