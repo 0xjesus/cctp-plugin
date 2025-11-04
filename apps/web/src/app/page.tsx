@@ -62,7 +62,7 @@ export default function Home() {
       <div className="grid gap-6">
         {/* Header */}
         <div className="text-center">
-          <h1 className="text-3xl font-bold">Data Provider Template</h1>
+          <h1 className="text-3xl font-bold">CCTP Provider Template</h1>
           <p className="text-muted-foreground mt-2">
             Template for building single-provider bridge data adapters
           </p>
